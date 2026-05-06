@@ -9,7 +9,7 @@ Sensor module that monitors cabinet and door open/closed states using reed switc
 - **Framework:** ESP-IDF
 - **Function:** Cabinet and door state monitoring with CAN bus reporting
 - **Key Features:**
-  - 13 reed switch inputs for open/closed detection
+  - 12 reed switch inputs for open/closed detection
   - CAN bus communication at 500 kbps (onboard TJA1051 transceiver)
   - Firmware-configurable CAN address via NVS (up to 8 modules per bus)
   - Over-the-air (OTA) firmware updates via WiFi (triggered over CAN)
@@ -93,8 +93,8 @@ Each module transmits a 2-byte message at 5 Hz (200 ms interval):
 | Byte | Bits  | Description                          |
 |------|-------|--------------------------------------|
 | 0    | 0-7   | Door status 1-8 (RSW01-RSW08)       |
-| 1    | 0-4   | Door status 9-13 (RSW09-RSW13)      |
-| 1    | 5-7   | Reserved                             |
+| 1    | 0-3   | Door status 9-12 (RSW09-RSW12)      |
+| 1    | 4-7   | Reserved                             |
 
 Each bit represents one reed switch: `1` = door open, `0` = door closed.
 
@@ -137,6 +137,8 @@ The firmware version is set in `CMakeLists.txt` via `PROJECT_VER` and reported d
 
 ### Pin Header (reed switch inputs)
 
+![Board Pin Mapping](DOCS/picket-pinout.png)
+
 | GPIO | Function | Notes                            |
 |------|----------|----------------------------------|
 | 4    | RSW01    | Internal pull-up, no ext. resistor |
@@ -151,7 +153,12 @@ The firmware version is set in `CMakeLists.txt` via `PROJECT_VER` and reported d
 | 13   | RSW10    | Internal pull-up, no ext. resistor |
 | 14   | RSW11    | Internal pull-up, no ext. resistor |
 | 43   | RSW12    | Internal pull-up, no ext. resistor |
-| 44   | RSW13    | Internal pull-up, no ext. resistor |
+
+### Ribbon Cable Pinout
+
+When connecting via a 20-pin IDC ribbon cable, the red stripe aligns with pin 1 (3.3V/5V end). The reed switch wires are interleaved due to standard odd/even row numbering.
+
+![Ribbon Cable Pinout](DOCS/picket-ribbon-cable.png)
 
 ## Hardware Requirements
 

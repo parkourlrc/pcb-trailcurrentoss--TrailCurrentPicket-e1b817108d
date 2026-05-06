@@ -6,8 +6,7 @@
 #include "driver/twai.h"
 #include "esp_log.h"
 #include "esp_timer.h"
-#include "esp_app_desc.h"
-#include "esp_mac.h"
+#include "can_common.h"
 #include "wifi_config.h"
 #include "ota.h"
 #include "discovery.h"
@@ -40,7 +39,6 @@ static const gpio_num_t RSW_PINS[] = {
     GPIO_NUM_13,  // RSW10
     GPIO_NUM_14,  // RSW11
     GPIO_NUM_43,  // RSW12
-    GPIO_NUM_44,  // RSW13
 };
 #define NUM_RSW (sizeof(RSW_PINS) / sizeof(RSW_PINS[0]))
 
@@ -102,47 +100,14 @@ static uint16_t read_reed_switches(void)
 // TWAI (CAN) task — runs independently (pattern from Solstice)
 // =============================================================================
 
+
 static void twai_task(void *arg)
 {
-    twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(
-        (gpio_num_t)CAN_TX_PIN, (gpio_num_t)CAN_RX_PIN, TWAI_MODE_NORMAL);
-    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
-    twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();
+    // Configure alerts BEFORE any bus activity so no error transitions are missed.
+    twai_reconfigure_alerts(CAN_COMMON_ALERTS, NULL);
 
-    if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to install TWAI driver");
-        vTaskDelete(NULL);
-        return;
-    }
-    if (twai_start() != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start TWAI driver");
-        vTaskDelete(NULL);
-        return;
-    }
-
-    // Broadcast firmware version on CAN 0x04 at startup
-    {
-        uint8_t mac[6];
-        esp_read_mac(mac, ESP_MAC_WIFI_STA);
-        const esp_app_desc_t *app = esp_app_get_description();
-        unsigned maj = 0, min = 0, pat = 0;
-        sscanf(app->version, "%u.%u.%u", &maj, &min, &pat);
-        twai_message_t ver_msg = {
-            .identifier = 0x04,
-            .data_length_code = 6,
-            .data = { mac[3], mac[4], mac[5], maj, min, pat }
-        };
-        twai_transmit(&ver_msg, pdMS_TO_TICKS(50));
-        ESP_LOGI(TAG, "Version broadcast: %s (CAN 0x04)", app->version);
-    }
-
-    uint32_t alerts = TWAI_ALERT_RX_DATA | TWAI_ALERT_ERR_PASS |
-                      TWAI_ALERT_BUS_ERROR | TWAI_ALERT_RX_QUEUE_FULL |
-                      TWAI_ALERT_BUS_OFF | TWAI_ALERT_BUS_RECOVERED |
-                      TWAI_ALERT_ERR_ACTIVE | TWAI_ALERT_TX_FAILED |
-                      TWAI_ALERT_TX_SUCCESS;
-    twai_reconfigure_alerts(alerts, NULL);
-    ESP_LOGI(TAG, "TWAI driver started (NORMAL mode)");
+    // Alerts armed — version broadcast TX failure is caught by the state machine.
+    can_common_version_broadcast();
 
     typedef enum { TX_ACTIVE, TX_PROBING } tx_state_t;
     bool bus_off = false;
@@ -167,7 +132,7 @@ static void twai_task(void *arg)
             ESP_LOGE(TAG, "TWAI bus-off, initiating recovery");
             bus_off = true;
             twai_initiate_recovery();
-            continue;
+            // No continue — fall through so RX_DATA in the same poll is still processed.
         }
         if (triggered & TWAI_ALERT_BUS_RECOVERED) {
             ESP_LOGI(TAG, "TWAI bus recovered, restarting");
@@ -192,6 +157,7 @@ static void twai_task(void *arg)
             if (tx_state == TX_PROBING) {
                 tx_state = TX_ACTIVE;
                 tx_fail_count = 0;
+                can_common_version_broadcast();
                 ESP_LOGI(TAG, "TWAI probe ACK'd, peer detected, resuming normal TX");
             }
             tx_fail_count = 0;
@@ -202,6 +168,7 @@ static void twai_task(void *arg)
             if (tx_state == TX_PROBING) {
                 tx_state = TX_ACTIVE;
                 tx_fail_count = 0;
+                can_common_version_broadcast();
                 ESP_LOGI(TAG, "TWAI peer detected via RX, resuming normal TX");
             }
             twai_message_t msg;
@@ -257,7 +224,7 @@ static void twai_task(void *arg)
                 .data_length_code = 2,
                 .data = {
                     (uint8_t)(debounced & 0xFF),         // RSW01-RSW08
-                    (uint8_t)((debounced >> 8) & 0x1F),  // RSW09-RSW13
+                    (uint8_t)((debounced >> 8) & 0x0F),  // RSW09-RSW12
                 }
             };
             twai_transmit(&tx_msg, 0);
@@ -313,6 +280,7 @@ void app_main(void)
     ESP_LOGI(TAG, "Module address: %d, CAN ID: 0x%02X", PICKET_ADDRESS, (unsigned)s_can_message_id);
 
     // CAN runs in its own task so bus errors never block app_main
+    ESP_ERROR_CHECK(can_common_init(CAN_TX_PIN, CAN_RX_PIN));
     xTaskCreatePinnedToCore(twai_task, "twai", 4096, NULL, 5, NULL, 1);
 
     ESP_LOGI(TAG, "=== Setup Complete ===");
